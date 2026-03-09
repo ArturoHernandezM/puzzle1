@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reconstrucción estructural</title>
+
+<style>
+
+body{
+font-family:Arial,sans-serif;
+background:#072146;
+margin:0;
+padding:20px;
+text-align:center;
+}
+
+.header{
+display:flex;
+justify-content:center;
+align-items:center;
+gap:25px;
+margin-bottom:12px;
+}
+
+.header h1{
+margin:0;
+font-size:26px;
+color:white;
+}
+
+audio{
+height:30px;
+transform:scale(0.9);
+}
+
+:root{
+--image-size:95px;
+}
+
+.board{
+display:flex;
+align-items:center;
+margin:0 auto;
+width:fit-content;
+background:white;
+padding:10px;
+border-radius:10px;
+box-shadow:0 6px 15px rgba(0,0,0,0.08);
+position:relative;
+flex-wrap:wrap;
+}
+
+.fixed-piece img,
+.piece img{
+height:var(--image-size);
+width:auto;
+display:block;
+pointer-events:none;
+user-drag:none;
+-webkit-user-drag:none;
+}
+
+.piece{
+display:flex;
+align-items:center;
+justify-content:center;
+cursor:grab;
+touch-action:none;
+user-select:none;
+transition:transform 0.15s;
+}
+
+.piece:active{
+transform:scale(1.07);
+}
+
+.pieces{
+display:flex;
+justify-content:center;
+gap:15px;
+flex-wrap:wrap;
+margin-top:15px;
+min-height:120px;
+}
+
+.controls{
+margin-top:9px;
+}
+
+button{
+padding:8px 16px;
+font-size:14px;
+border:none;
+border-radius:6px;
+background:#222;
+color:white;
+cursor:pointer;
+}
+
+button:hover{
+background:#444;
+}
+
+button:disabled{
+background:#999;
+}
+
+#attempts{
+margin-top:6px;
+font-size:14px;
+color:white;
+}
+#verifyBtn{
+background:#30B067;
+font-size:16px;
+padding:10px 22px;
+font-weight:bold;
+}
+
+#verifyBtn:hover{
+background:#3ee082;
+}
+.overlay{
+position:fixed;
+top:0;
+left:0;
+width:100%;
+height:100%;
+background:rgba(0,0,0,0.4);
+display:flex;
+align-items:center;
+justify-content:center;
+opacity:0;
+pointer-events:none;
+transition:opacity 0.6s ease;
+}
+
+.overlay-content{
+background:white;
+padding:40px 60px;
+border-radius:12px;
+font-size:24px;
+}
+
+.show{
+opacity:1;
+pointer-events:auto;
+}
+
+#successMark{
+position:absolute;
+right:-55px;
+top:50%;
+transform:translateY(-50%) scale(0);
+font-size:60px;
+color:#44f814;
+transition:transform 0.4s ease;
+}
+
+#successMark.show{
+transform:translateY(-50%) scale(1.2);
+animation:pulseCheck 0.8s ease;
+}
+
+@keyframes pulseCheck{
+0%{transform:translateY(-50%) scale(1);}
+50%{transform:translateY(-50%) scale(1.4);}
+100%{transform:translateY(-50%) scale(1.2);}
+}
+
+.placeholder{
+width:var(--image-size);
+height:var(--image-size);
+border:2px dashed #bbb;
+border-radius:6px;
+background:#f3f3f3;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="header">
+<h1>Reconstruye la frase musical</h1>
+
+<audio id="modelPlayer" controls>
+<source src="modelo.mp3" type="audio/mpeg">
+</audio>
+
+</div>
+
+<div class="board" id="board">
+
+<div class="fixed-piece">
+<img src="0.png">
+</div>
+
+<div id="successMark">✔</div>
+
+</div>
+
+<div class="pieces" id="piecesContainer"></div>
+
+<div class="controls">
+
+<button id="verifyBtn" onclick="checkOrder()">Verificar</button>
+
+<button id="retryBtn" onclick="resetGame()" style="display:none;">Reintentar</button>
+
+<div id="attempts">Intentos: 0</div>
+
+</div>
+
+<div class="overlay" id="overlay">
+<div class="overlay-content" id="overlayMessage"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+<script>
+
+const correctOrder=[1,2,3,4,5,6,7,8];
+const distractors=[];
+
+let attempts=0;
+let gameFinished=false;
+
+const clickSound=new Audio("click.mp3");
+const successSound=new Audio("success.mp3");
+const wrongSound=new Audio("error.mp3");
+
+const board=document.getElementById("board");
+const piecesContainer=document.getElementById("piecesContainer");
+
+const overlay=document.getElementById("overlay");
+const overlayMessage=document.getElementById("overlayMessage");
+
+function playModel(){
+
+const player=document.getElementById("modelPlayer");
+player.currentTime=0;
+player.play();
+
+}
+
+/* CREAR PIEZAS */
+
+let pieces=[...correctOrder,...distractors];
+
+pieces.sort(()=>Math.random()-0.5);
+
+pieces.forEach(num=>{
+
+const div=document.createElement("div");
+
+div.classList.add("piece");
+div.dataset.id=num;
+
+div.innerHTML=`<img src="${num}.png">`;
+
+enablePiece(div);
+
+piecesContainer.appendChild(div);
+
+});
+
+/* SISTEMA DE ARRASTRE */
+
+let dragged=null;
+let offsetX=0;
+let offsetY=0;
+let placeholder=document.createElement("div");
+placeholder.className="placeholder";
+
+function enablePiece(piece){
+
+let startX,startY;
+let dragging=false;
+let fragmentAudio=null;
+
+piece.addEventListener("pointerdown",e=>{
+
+if(gameFinished)return;
+
+startX=e.clientX;
+startY=e.clientY;
+
+dragging=false;
+
+document.addEventListener("pointermove",moveCheck);
+document.addEventListener("pointerup",release);
+
+function moveCheck(ev){
+
+const dx=Math.abs(ev.clientX-startX);
+const dy=Math.abs(ev.clientY-startY);
+
+if(dx>8 || dy>8){
+
+startDrag(ev);
+
+}
+
+}
+
+function startDrag(ev){
+
+dragging=true;
+
+dragged=piece;
+
+board.appendChild(placeholder);
+
+const rect=piece.getBoundingClientRect();
+
+offsetX=ev.clientX-rect.left;
+offsetY=ev.clientY-rect.top;
+
+piece.style.position="absolute";
+piece.style.zIndex="1000";
+
+movePiece(ev);
+
+document.removeEventListener("pointermove",moveCheck);
+
+document.addEventListener("pointermove",movePiece);
+
+}
+
+function release(ev){
+
+document.removeEventListener("pointermove",moveCheck);
+document.removeEventListener("pointermove",movePiece);
+document.removeEventListener("pointerup",release);
+
+if(dragging){
+
+dropPiece(ev);
+
+}else{
+
+if(fragmentAudio){
+
+fragmentAudio.pause();
+fragmentAudio.currentTime=0;
+
+}
+
+fragmentAudio=new Audio(piece.dataset.id+".mp3");
+fragmentAudio.play();
+
+}
+
+}
+
+});
+
+}
+function movePiece(e){
+
+if(!dragged)return;
+
+dragged.style.left=(e.clientX-offsetX)+"px";
+dragged.style.top=(e.clientY-offsetY)+"px";
+
+updatePlaceholder(e.clientX,e.clientY);
+
+}
+function updatePlaceholder(x,y){
+
+const pieces=[...board.querySelectorAll(".piece")].filter(p=>p!==dragged);
+
+let closest=null;
+let closestDist=Infinity;
+
+for(let p of pieces){
+
+const rect=p.getBoundingClientRect();
+
+const cx=rect.left+rect.width/2;
+const cy=rect.top+rect.height/2;
+
+const dist=Math.hypot(cx-x,cy-y);
+
+if(dist<closestDist){
+closestDist=dist;
+closest=p;
+}
+
+}
+
+if(!closest){
+board.appendChild(placeholder);
+return;
+}
+
+const rect=closest.getBoundingClientRect();
+
+if(x < rect.left + rect.width/2){
+board.insertBefore(placeholder,closest);
+}else{
+board.insertBefore(placeholder,closest.nextSibling);
+}
+
+}
+
+function dropPiece(e){
+
+if(!dragged)return;
+
+const boardRect=board.getBoundingClientRect();
+
+if(e.clientY>boardRect.top-60 && e.clientY<boardRect.bottom+60){
+
+board.insertBefore(dragged,placeholder);
+placeholder.remove();
+
+}else{
+
+piecesContainer.appendChild(dragged);
+placeholder.remove();
+
+}
+
+dragged.style.position="static";
+dragged.style.zIndex="";
+
+dragged=null;
+
+document.removeEventListener("pointermove",movePiece);
+document.removeEventListener("pointerup",dropPiece);
+
+clickSound.currentTime=0;
+clickSound.play();
+
+}
+
+function insertPiece(x,y){
+
+const pieces=[...board.querySelectorAll(".piece")];
+
+if(pieces.length===0){
+board.appendChild(dragged);
+return;
+}
+
+let closest=null;
+let closestDist=Infinity;
+
+for(let p of pieces){
+
+const rect=p.getBoundingClientRect();
+const cx=rect.left+rect.width/2;
+const cy=rect.top+rect.height/2;
+
+const dist=Math.hypot(cx-x,cy-y);
+
+if(dist<closestDist){
+closestDist=dist;
+closest=p;
+}
+
+}
+
+const rect=closest.getBoundingClientRect();
+
+if(x < rect.left + rect.width/2){
+board.insertBefore(dragged,closest);
+}else{
+board.insertBefore(dragged,closest.nextSibling);
+}
+
+limitPieces();
+
+}
+function limitPieces(){
+
+const pieces=[...board.querySelectorAll(".piece")];
+
+if(pieces.length>correctOrder.length){
+
+piecesContainer.appendChild(pieces[pieces.length-1]);
+
+}
+
+}
+
+/* VERIFICAR */
+
+function checkOrder(){
+
+if(gameFinished){
+
+successSound.currentTime=0;
+successSound.play();
+
+launchConfetti();
+
+playModel();
+
+showOverlay("¡Correcto! 🎉");
+
+const mark=document.getElementById("successMark");
+mark.classList.remove("show");
+void mark.offsetWidth;
+mark.classList.add("show");
+
+return;
+
+}
+
+attempts++;
+
+document.getElementById("attempts").textContent="Intentos: "+attempts;
+
+const current=[...board.children]
+
+.filter(el=>el.classList.contains("piece"))
+
+.map(p=>parseInt(p.dataset.id));
+
+if(current.length!==correctOrder.length){
+
+wrongSound.play();
+
+showOverlay("La frase debe tener "+correctOrder.length+" fragmentos.");
+
+return;
+
+}
+
+if(JSON.stringify(current)===JSON.stringify(correctOrder)){
+
+successSound.play();
+
+showOverlay("¡Correcto! 🎉");
+
+gameFinished=true;
+
+
+document.getElementById("retryBtn").style.display="inline-block";
+
+document.getElementById("successMark").classList.add("show");
+
+playModel();
+
+launchConfetti();
+
+}else{
+
+wrongSound.play();
+
+showOverlay("Hay fragmentos incorrectos.");
+
+}
+
+}
+
+function showOverlay(text){
+
+overlayMessage.textContent=text;
+
+overlay.classList.add("show");
+
+setTimeout(()=>{
+
+overlay.classList.remove("show");
+
+},2800);
+
+}
+
+function resetGame(){
+
+location.reload();
+
+}
+
+function launchConfetti(){
+
+confetti({
+particleCount:150,
+spread:90,
+origin:{y:0.6}
+});
+
+}
+
+</script>
+
+</body>
+</html>
